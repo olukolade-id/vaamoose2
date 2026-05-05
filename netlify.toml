@@ -1,0 +1,8 @@
+[build]
+  command = "npm install && chmod +x node_modules/.bin/vite && ./node_modules/.bin/vite build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

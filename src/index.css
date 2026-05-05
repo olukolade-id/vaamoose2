@@ -1,0 +1,220 @@
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Vaamoose Theme - Blue, White, Grey */
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 221 83% 53%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 221 83% 53%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 221 83% 53%;
+    --radius: 0.75rem;
+    
+    /* Vaamoose Custom Colors */
+    --vaamoose-blue: 221 83% 53%;
+    --vaamoose-blue-light: 217 91% 60%;
+    --vaamoose-blue-dark: 224 76% 48%;
+    --vaamoose-grey: 210 40% 96%;
+    --vaamoose-text: 222 47% 11%;
+    --vaamoose-text-muted: 215 16% 47%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  body {
+    @apply bg-white text-slate-900 antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-weight: 700;
+  }
+}
+
+@layer components {
+  /* Vaamoose Button Styles */
+  .btn-primary {
+    @apply bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 font-medium px-6 py-3 rounded-lg;
+  }
+  
+  .btn-secondary {
+    @apply bg-slate-100 text-slate-900 hover:bg-slate-200 transition-all duration-200 font-medium px-6 py-3 rounded-lg;
+  }
+  
+  .btn-outline {
+    @apply border-2 border-blue-600 text-blue-600 hover:bg-blue-50 transition-all duration-200 font-medium px-6 py-3 rounded-lg;
+  }
+  
+  /* Card Styles */
+  .card-vaamoose {
+    @apply bg-white rounded-2xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow duration-200;
+  }
+  
+  /* Input Styles */
+  .input-vaamoose {
+    @apply w-full px-4 py-3 border border-slate-200 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all outline-none;
+  }
+  
+  /* Gradient Backgrounds */
+  .gradient-hero {
+    background: linear-gradient(180deg, #FFFFFF 0%, #F0F7FF 50%, #E0EFFF 100%);
+  }
+  
+  .gradient-blue-soft {
+    background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  
+  .animation-delay-100 {
+    animation-delay: 100ms;
+  }
+  
+  .animation-delay-200 {
+    animation-delay: 200ms;
+  }
+  
+  .animation-delay-300 {
+    animation-delay: 300ms;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F5F9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+/* Selection Color */
+::selection {
+  background: rgba(37, 99, 235, 0.2);
+  color: #0F172A;
+}
+
+/* Animations */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.5s ease-out forwards;
+}
+
+/* Seat Selection Styles */
+.seat-available {
+  @apply bg-emerald-100 border-emerald-300 text-emerald-700 hover:bg-emerald-200 cursor-pointer;
+}
+
+.seat-selected {
+  @apply bg-blue-600 border-blue-600 text-white;
+}
+
+.seat-occupied {
+  @apply bg-slate-200 border-slate-300 text-slate-400 cursor-not-allowed;
+}
+
+.seat-premium {
+  @apply bg-amber-100 border-amber-300 text-amber-700 hover:bg-amber-200 cursor-pointer;
+}
+
+/* Upload Zone */
+.upload-zone {
+  @apply border-2 border-dashed border-slate-300 rounded-2xl p-8 text-center hover:border-blue-400 hover:bg-blue-50 transition-all cursor-pointer;
+}
+
+.upload-zone-active {
+  @apply border-blue-500 bg-blue-50;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
