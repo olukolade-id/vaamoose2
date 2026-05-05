@@ -1,4 +1,8 @@
 import { useEffect, useState } from 'react';
+<<<<<<< HEAD
+=======
+import { useSearchParams } from 'react-router-dom';
+>>>>>>> b25a3e30 (feat: Complete Payaza payment integration with checkout page and booking creation)
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -6,6 +10,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 export function CheckoutPage() {
+<<<<<<< HEAD
+=======
+  const [searchParams] = useSearchParams();
+>>>>>>> b25a3e30 (feat: Complete Payaza payment integration with checkout page and booking creation)
   const [isLoading, setIsLoading] = useState(false);
   const [cardData, setCardData] = useState({
     cardNumber: '',
@@ -15,12 +23,18 @@ export function CheckoutPage() {
     cardHolderName: ''
   });
 
+<<<<<<< HEAD
   const searchParams = new URLSearchParams(window.location.search);
+=======
+>>>>>>> b25a3e30 (feat: Complete Payaza payment integration with checkout page and booking creation)
   const reference = searchParams.get('reference');
   const amount = searchParams.get('amount');
   const email = searchParams.get('email');
   const provider = searchParams.get('provider');
+<<<<<<< HEAD
   const bookingData = JSON.parse(localStorage.getItem('bookingData') || '{}');
+=======
+>>>>>>> b25a3e30 (feat: Complete Payaza payment integration with checkout page and booking creation)
 
   useEffect(() => {
     if (!reference || !amount || !email) {
@@ -74,10 +88,17 @@ export function CheckoutPage() {
 
         if (data.success) {
           toast.success('Payment successful!');
+<<<<<<< HEAD
           localStorage.removeItem('bookingData');
           window.location.href = `/?reference=${reference}`;
         } else {
           toast.error(data.error || data.message || 'Payment failed');
+=======
+          // Redirect to verification page
+          window.location.href = `/verify-receipt?reference=${reference}`;
+        } else {
+          toast.error(data.message || 'Payment failed');
+>>>>>>> b25a3e30 (feat: Complete Payaza payment integration with checkout page and booking creation)
         }
       }
     } catch (error) {
