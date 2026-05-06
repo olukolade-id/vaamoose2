@@ -20,7 +20,7 @@ async function runDiagnostics() {
   // 1. Check environment variables
   log.info('Checking environment configuration...');
   const provider = process.env.PAYMENT_PROVIDER || 'payaza';
-  const payazaKey = process.env.PAYAZA_API_KEY;
+  const payazaKey = process.env.PAYAZA_API_SECRET_KEY;
   const paystackKey = process.env.PAYSTACK_SECRET_KEY;
   const payazaBase = process.env.PAYAZA_BASE_URL || 'https://api.payaza.africa/live';
 

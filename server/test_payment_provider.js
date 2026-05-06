@@ -10,7 +10,7 @@ async function testPaymentProvider() {
 
   // Check environment variables
   console.log(`✓ PAYMENT_PROVIDER env var: ${process.env.PAYMENT_PROVIDER}`);
-  console.log(`✓ PAYAZA_API_KEY exists: ${!!process.env.PAYAZA_API_KEY}`);
+  console.log(`✓ PAYAZA_API_SECRET_KEY exists: ${!!process.env.PAYAZA_API_SECRET_KEY}`);
   console.log(`✓ PAYAZA_BASE_URL: ${process.env.PAYAZA_BASE_URL}`);
   console.log(`✓ PAYSTACK_SECRET_KEY exists: ${!!process.env.PAYSTACK_SECRET_KEY}\n`);
 
