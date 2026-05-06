@@ -16,6 +16,7 @@ export function CheckoutPage() {
     cvv: '',
     cardHolderName: ''
   });
+  const [bookingData, setBookingData] = useState<any>(null);
 
   const reference = searchParams.get('reference');
   const amount = searchParams.get('amount');
@@ -23,6 +24,15 @@ export function CheckoutPage() {
   const provider = searchParams.get('provider');
 
   useEffect(() => {
+    const storedBooking = localStorage.getItem('bookingData');
+    if (storedBooking) {
+      try {
+        setBookingData(JSON.parse(storedBooking));
+      } catch {
+        setBookingData(null);
+      }
+    }
+
     if (!reference || !amount || !email) {
       toast.error('Invalid checkout parameters');
     }
@@ -48,6 +58,12 @@ export function CheckoutPage() {
 
     try {
       if (provider === 'payaza') {
+        if (!bookingData) {
+          toast.error('No booking data found. Please restart the booking process.');
+          setIsLoading(false);
+          return;
+        }
+
         // Call Payaza card charge endpoint
         const response = await fetch(
           'https://blissful-exploration-production.up.railway.app/api/payment/payaza/card-charge',
@@ -73,11 +89,11 @@ export function CheckoutPage() {
         const data = await response.json();
 
         if (data.success) {
+          localStorage.removeItem('bookingData');
           toast.success('Payment successful!');
-          // Redirect to verification page
-          window.location.href = `/verify-receipt?reference=${reference}`;
+          window.location.href = `/?reference=${reference}`;
         } else {
-          toast.error(data.message || 'Payment failed');
+          toast.error(data.error || data.message || 'Payment failed');
         }
       }
     } catch (error) {

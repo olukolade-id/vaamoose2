@@ -12,15 +12,20 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const sendEmail = async (to, subject, html) => {
   try {
-    await resend.emails.send({
+    const result = await resend.emails.send({
       from: 'Vaamoose <onboarding@resend.dev>',
       to,
       subject,
       html,
     });
-    console.log(`Email sent to ${to}`);
+    console.log(`✓ Email sent to ${to}`, { subject, id: result.id });
+    return result;
   } catch (e) {
-    console.error('Email error:', e.message);
+    console.error(`✗ Email error for ${to}:`, {
+      subject,
+      error: e.message
+    });
+    throw e;
   }
 };
 
@@ -165,9 +170,17 @@ router.post('/initialize', async (req, res) => {
 router.get('/verify/:reference', async (req, res) => {
   try {
     const { reference } = req.params;
+    
+    if (!reference) {
+      return res.status(400).json({ error: 'Payment reference is required' });
+    }
 
+    // Check if booking already exists
     const existing = await Booking.findOne({ paymentReference: reference });
-    if (existing) return res.json({ success: true, booking: existing });
+    if (existing) {
+      console.log(`Booking already exists for reference: ${reference}`);
+      return res.json({ success: true, booking: existing });
+    }
 
     let transaction;
     let provider = 'paystack'; // Default
@@ -175,32 +188,67 @@ router.get('/verify/:reference', async (req, res) => {
     // Try Payaza first if configured
     if (paymentService.getCurrentProvider() === 'payaza') {
       try {
+        console.log(`Verifying Payaza transaction: ${reference}`);
         const payazaResponse = await paymentService.getTransactionStatus(reference);
-        if (payazaResponse && payazaResponse.status === 'success') {
+        
+        if (payazaResponse && (payazaResponse.status === 'success' || payazaResponse.success)) {
           transaction = {
             status: 'success',
             reference,
             amount: payazaResponse.amount || 0,
-            customer: { email: payazaResponse.email || '' },
-            metadata: payazaResponse.metadata || {}
+            customer: { email: payazaResponse.email || payazaResponse.customer?.email || '' },
+            metadata: payazaResponse.metadata || payazaResponse.service_payload || {}
           };
           provider = 'payaza';
+          console.log(`✓ Payaza transaction verified successfully`);
+        } else {
+          console.warn(`Payaza transaction status not success: ${payazaResponse?.status}`);
+          // Fall through to Paystack fallback
         }
       } catch (payazaError) {
-        console.log('Payaza verification failed, trying Paystack:', payazaError.message);
+        console.error('Payaza verification error:', {
+          message: payazaError.message,
+          status: payazaError.response?.status,
+          data: payazaError.response?.data
+        });
+        
+        // Try Paystack as fallback if Payaza fails
+        console.log(`Payaza failed, attempting Paystack fallback for reference: ${reference}`);
+        if (!PAYSTACK_SECRET) {
+          return res.status(400).json({
+            error: 'Payment provider unavailable. Please contact support.'
+          });
+        }
       }
     }
 
-    // Fallback to Paystack if Payaza failed or not configured
+    // Fallback to Paystack - try if Payaza didn't work or is not configured
     if (!transaction) {
-      const response = await axios.get(
-        `https://api.paystack.co/transaction/verify/${reference}`,
-        { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } }
-      );
+      try {
+        console.log(`Verifying with Paystack: ${reference}`);
+        const response = await axios.get(
+          `https://api.paystack.co/transaction/verify/${reference}`,
+          { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } }
+        );
 
-      if (!response.data.status) return res.status(400).json({ error: 'Verification failed' });
-      transaction = response.data.data;
-      provider = 'paystack';
+        if (!response.data.status || !response.data.data) {
+          console.warn('Paystack verification returned false status');
+          return res.status(400).json({ error: 'Payment verification failed. Transaction not found.' });
+        }
+        
+        transaction = response.data.data;
+        provider = 'paystack';
+        console.log(`✓ Paystack transaction verified successfully`);
+      } catch (paystackError) {
+        console.error('Paystack verification error:', {
+          message: paystackError.message,
+          status: paystackError.response?.status,
+          data: paystackError.response?.data
+        });
+        return res.status(400).json({
+          error: paystackError.response?.data?.message || 'Payment reference not found or expired. Please complete payment and try again.'
+        });
+      }
     }
 
     if (transaction.status !== 'success') {
@@ -210,40 +258,77 @@ router.get('/verify/:reference', async (req, res) => {
     let bookingData = {};
     try {
       bookingData = JSON.parse(transaction.metadata?.bookingData || '{}');
-    } catch {
+    } catch (parseError) {
+      console.warn('Failed to parse booking data:', parseError.message);
       bookingData = transaction.metadata?.bookingData || {};
     }
 
+    // Validate required booking data
+    if (!bookingData.companyId || !bookingData.schoolId) {
+      console.error('Missing required booking data:', { companyId: bookingData.companyId, schoolId: bookingData.schoolId });
+      return res.status(400).json({ 
+        error: 'Invalid payment metadata. Please contact support.' 
+      });
+    }
+
     const studentEmail = transaction.customer?.email;
-    const amountPaid = transaction.amount / 100; // Paystack amounts are in kobo
+    if (!studentEmail) {
+      console.error('No student email found in transaction');
+      return res.status(400).json({ 
+        error: 'Payment verification incomplete. Missing customer email.' 
+      });
+    }
+
+    // Handle amount conversion based on provider
+    let amountPaid;
+    if (provider === 'paystack') {
+      amountPaid = transaction.amount / 100; // Paystack amounts are in kobo
+    } else {
+      amountPaid = transaction.amount || 0; // Payaza amounts may be in the correct unit already
+    }
+
     const formattedAmount = `₦${amountPaid.toLocaleString('en-NG')}`;
     const refUpper = reference.toUpperCase();
     const seatList = (bookingData.seats || []).map(s => `Row ${s.row} Seat ${s.column}`).join(', ') || 'N/A';
 
-    const booking = new Booking({
-      schoolId:         bookingData.schoolId,
-      schoolName:       bookingData.schoolName,
-      companyId:        bookingData.companyId,
-      companyName:      bookingData.companyName,
-      userEmail:        studentEmail,
-      vehicleId:        bookingData.vehicleId,
-      vehicleName:      bookingData.vehicleName,
-      route:            bookingData.routeTo || bookingData.route || 'N/A',
-      pickupLocation:   bookingData.pickupLocation || '',
-      departureDate:    bookingData.departureDate || new Date(),
-      departureTime:    bookingData.departureTime || 'N/A',
-      seats:            bookingData.seats || [],
-      price:            bookingData.totalPrice || amountPaid,
-      luggagePhotos:    bookingData.luggagePhotos || [],
-      paymentStatus:    'paid',
-      paymentReference: reference,
-      paymentProvider:  provider,
-      paidAt:           new Date(),
-      amountPaid,
-    });
+    let booking;
+    try {
+      booking = new Booking({
+        schoolId:         bookingData.schoolId,
+        schoolName:       bookingData.schoolName,
+        companyId:        bookingData.companyId,
+        companyName:      bookingData.companyName,
+        userEmail:        studentEmail,
+        vehicleId:        bookingData.vehicleId,
+        vehicleName:      bookingData.vehicleName,
+        route:            bookingData.routeTo || bookingData.route || 'N/A',
+        pickupLocation:   bookingData.pickupLocation || '',
+        departureDate:    bookingData.departureDate || new Date(),
+        departureTime:    bookingData.departureTime || 'N/A',
+        seats:            bookingData.seats || [],
+        price:            bookingData.totalPrice || amountPaid,
+        luggagePhotos:    bookingData.luggagePhotos || [],
+        paymentStatus:    'paid',
+        paymentReference: reference,
+        paymentProvider:  provider,
+        paidAt:           new Date(),
+        amountPaid,
+      });
 
-    await booking.save();
+      await booking.save();
+      console.log(`✓ Booking saved successfully for reference: ${reference}`);
+    } catch (dbError) {
+      console.error('Database error saving booking:', {
+        message: dbError.message,
+        reference,
+        errors: dbError.errors
+      });
+      return res.status(500).json({ 
+        error: 'Failed to save booking. Please contact support with reference: ' + reference 
+      });
+    }
 
+    // Send emails asynchronously (non-blocking)
     // EMAIL 1: Student confirmation
     sendEmail(
       studentEmail,
@@ -274,7 +359,7 @@ router.get('/verify/:reference', async (req, res) => {
           <p style="color:#94a3b8;font-size:12px;margin-bottom:0">— The Vaamoose Team 🚌</p>
         </div>
       </div>`
-    );
+    ).catch(e => console.error('Failed to send student email:', e.message));
 
     // EMAIL 2: Admin notification
     sendEmail(
@@ -292,34 +377,46 @@ router.get('/verify/:reference', async (req, res) => {
           <tr><td style="padding:8px 4px;color:#64748b;font-size:14px">Reference</td><td style="padding:8px 4px;font-family:monospace;font-size:14px">${refUpper}</td></tr>
         </table>
       </div>`
-    );
+    ).catch(e => console.error('Failed to send admin email:', e.message));
 
     // EMAIL 3: Partner notification
-    const partner = await Partner.findById(bookingData.companyId).select('email companyName');
-    if (partner?.email) {
-      sendEmail(
-        partner.email,
-        `📋 New Booking — ${bookingData.schoolName} → ${bookingData.routeTo}`,
-        `<div style="font-family:sans-serif;max-width:520px">
-          <h2 style="color:#2563eb;margin-top:0">New Booking on Vaamoose</h2>
-          <p style="color:#475569">Hi <b>${partner.companyName}</b>, you have a new confirmed booking!</p>
-          <table style="width:100%;border-collapse:collapse">
-            <tr><td style="padding:8px 4px;color:#64748b;font-size:14px;width:140px">Route</td><td style="padding:8px 4px;font-weight:600;font-size:14px">${bookingData.schoolName} → ${bookingData.routeTo}</td></tr>
-            <tr style="background:#f8fafc"><td style="padding:8px 4px;color:#64748b;font-size:14px">Date & Time</td><td style="padding:8px 4px;font-size:14px">${bookingData.departureDate} at ${bookingData.departureTime}</td></tr>
-            <tr><td style="padding:8px 4px;color:#64748b;font-size:14px">Seat(s)</td><td style="padding:8px 4px;font-size:14px">${seatList}</td></tr>
-            ${bookingData.pickupLocation ? `<tr style="background:#f8fafc"><td style="padding:8px 4px;color:#64748b;font-size:14px">Pickup Point</td><td style="padding:8px 4px;font-weight:600;color:#2563eb;font-size:14px">📍 ${bookingData.pickupLocation}</td></tr>` : ''}
-            <tr><td style="padding:8px 4px;color:#64748b;font-size:14px">Your Earnings (85%)</td><td style="padding:8px 4px;font-weight:700;color:#16a34a;font-size:16px">₦${Math.round(amountPaid * 0.85).toLocaleString('en-NG')}</td></tr>
-            <tr style="background:#f8fafc"><td style="padding:8px 4px;color:#64748b;font-size:14px">Reference</td><td style="padding:8px 4px;font-family:monospace;font-size:14px">${refUpper}</td></tr>
-          </table>
-          <p style="color:#64748b;font-size:13px;margin-top:16px">View all bookings in your <a href="https://vaamoose.online" style="color:#2563eb;font-weight:600">partner dashboard →</a></p>
-        </div>`
-      );
+    try {
+      const partner = await Partner.findById(bookingData.companyId).select('email companyName');
+      if (partner?.email) {
+        sendEmail(
+          partner.email,
+          `📋 New Booking — ${bookingData.schoolName} → ${bookingData.routeTo}`,
+          `<div style="font-family:sans-serif;max-width:520px">
+            <h2 style="color:#2563eb;margin-top:0">New Booking on Vaamoose</h2>
+            <p style="color:#475569">Hi <b>${partner.companyName}</b>, you have a new confirmed booking!</p>
+            <table style="width:100%;border-collapse:collapse">
+              <tr><td style="padding:8px 4px;color:#64748b;font-size:14px;width:140px">Route</td><td style="padding:8px 4px;font-weight:600;font-size:14px">${bookingData.schoolName} → ${bookingData.routeTo}</td></tr>
+              <tr style="background:#f8fafc"><td style="padding:8px 4px;color:#64748b;font-size:14px">Date & Time</td><td style="padding:8px 4px;font-size:14px">${bookingData.departureDate} at ${bookingData.departureTime}</td></tr>
+              <tr><td style="padding:8px 4px;color:#64748b;font-size:14px">Seat(s)</td><td style="padding:8px 4px;font-size:14px">${seatList}</td></tr>
+              ${bookingData.pickupLocation ? `<tr style="background:#f8fafc"><td style="padding:8px 4px;color:#64748b;font-size:14px">Pickup Point</td><td style="padding:8px 4px;font-weight:600;color:#2563eb;font-size:14px">📍 ${bookingData.pickupLocation}</td></tr>` : ''}
+              <tr><td style="padding:8px 4px;color:#64748b;font-size:14px">Your Earnings (85%)</td><td style="padding:8px 4px;font-weight:700;color:#16a34a;font-size:16px">₦${Math.round(amountPaid * 0.85).toLocaleString('en-NG')}</td></tr>
+              <tr style="background:#f8fafc"><td style="padding:8px 4px;color:#64748b;font-size:14px">Reference</td><td style="padding:8px 4px;font-family:monospace;font-size:14px">${refUpper}</td></tr>
+            </table>
+            <p style="color:#64748b;font-size:13px;margin-top:16px">View all bookings in your <a href="https://vaamoose.online" style="color:#2563eb;font-weight:600">partner dashboard →</a></p>
+          </div>`
+        ).catch(e => console.error('Failed to send partner email:', e.message));
+      }
+    } catch (partnerError) {
+      console.warn('Failed to fetch or notify partner:', partnerError.message);
     }
 
+    console.log(`✓ Payment verification completed successfully for reference: ${reference}`);
     res.json({ success: true, booking, message: 'Payment verified and booking confirmed!' });
   } catch (error) {
-    console.error('Payment verify error:', error?.response?.data || error.message);
-    res.status(500).json({ error: error?.response?.data?.message || error.message });
+    console.error('Payment verify error:', {
+      message: error.message,
+      stack: error.stack,
+      response: error?.response?.data
+    });
+    res.status(500).json({ 
+      error: error?.response?.data?.message || error.message || 'Payment verification failed. Please contact support.',
+      reference: req.params.reference
+    });
   }
 });
 

@@ -104,11 +104,17 @@ class PaymentService {
 
   async payazaTransactionStatus(reference) {
     try {
+      if (!this.payaza.apiKey) {
+        throw new Error('Payaza API key not configured');
+      }
+
       const payload = {
         service_payload: {
           transaction_reference: reference
         }
       };
+
+      console.log(`[Payaza] Checking transaction status for: ${reference}`);
 
       const response = await axios.post(
         `${this.payaza.baseUrl}/card/card_charge/transaction_status`,
@@ -117,13 +123,26 @@ class PaymentService {
           headers: {
             'Authorization': `Payaza ${this.payaza.apiKey}`,
             'Content-Type': 'application/json'
-          }
+          },
+          timeout: 10000 // 10 second timeout
         }
       );
 
+      console.log(`[Payaza] Transaction status response:`, {
+        status: response.status,
+        dataKeys: Object.keys(response.data || {})
+      });
+
       return response.data;
     } catch (error) {
-      console.error('Payaza transaction status error:', error.response?.data || error.message);
+      const errorDetails = {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        reference
+      };
+      console.error('[Payaza] Transaction status error:', errorDetails);
       throw error;
     }
   }
