@@ -29,7 +29,7 @@ const sendEmail = async (to, subject, html) => {
   }
 };
 
-// INITIALIZE payment - Try Payaza first, fallback to Paystack
+// INITIALIZE payment (Payaza only)
 router.post('/initialize', async (req, res) => {
   try {
     const { email, amount, bookingData, paymentMethod = 'card' } = req.body;
@@ -47,122 +47,24 @@ router.post('/initialize', async (req, res) => {
     const partner = await Partner.findById(companyId);
     if (!partner) return res.status(404).json({ error: 'Company not found' });
 
-    // Use the configured payment provider (from PAYMENT_PROVIDER env var)
-    const provider = paymentService.getCurrentProvider();
-    console.log(`Processing payment with provider: ${provider} for amount: ₦${amount}`);
+    // Always use Payaza for Vaamoose payments
+    const reference = `VAAMO-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const payazaCheckoutUrl = `${FRONTEND_URL}/checkout?reference=${reference}&amount=${amount}&email=${email}&provider=payaza`;
 
-    if (provider === 'paystack') {
-      if (!partner.paystackSubaccountCode) {
-        return res.status(400).json({ error: 'This company is not yet set up to receive payments. Please contact support.' });
-      }
+    console.log(`Payaza payment setup - Reference: ${reference}, Amount: ₦${amount}, Email: ${email}`);
 
-      const amountInKobo = Math.round(amount * 100);
-      const paystackPayload = {
-        email,
-        amount: amountInKobo,
-        currency: 'NGN',
-        callback_url: FRONTEND_URL,
-        metadata: {
-          bookingData: JSON.stringify(bookingData),
-          companyId,
-          custom_fields: [
-            { display_name: 'Company', variable_name: 'company', value: partner.companyName },
-            { display_name: 'Route', variable_name: 'route', value: bookingData.routeTo || '' },
-          ],
-        },
-        subaccount: partner.paystackSubaccountCode,
-        bearer: 'account',
-      };
-
-      const response = await axios.post(
-        'https://api.paystack.co/transaction/initialize',
-        paystackPayload,
-        { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, 'Content-Type': 'application/json' } }
-      );
-
-      if (!response.data.status) return res.status(400).json({ error: response.data.message });
-
-      res.json({
-        authorization_url: response.data.data.authorization_url,
-        access_code: response.data.data.access_code,
-        reference: response.data.data.reference,
-        provider: 'paystack'
-      });
-    } else {
-      // For Payaza card payments - create a payment link/reference
-      const reference = `VAAMO-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
-      // Store the payment intent in memory or database for later verification
-      const payazaCheckoutUrl = `${FRONTEND_URL}/checkout?reference=${reference}&amount=${amount}&email=${email}&provider=payaza`;
-
-      // Log the payment setup
-      console.log(`Payaza payment setup - Reference: ${reference}, Amount: ₦${amount}, Email: ${email}`);
-
-      res.json({
-        authorization_url: payazaCheckoutUrl,
-        reference,
-        amount,
-        email,
-        provider: 'payaza',
-        paymentMethod
-      });
-    }
+    return res.json({
+      authorization_url: payazaCheckoutUrl,
+      reference,
+      amount,
+      email,
+      provider: 'payaza',
+      paymentMethod
+    });
   } catch (error) {
     const errData = error?.response?.data;
     console.error('Payment init error:', errData || error.message);
-
-    // If Payaza fails and is the current provider, try Paystack as fallback
-    if (paymentService.getCurrentProvider() === 'payaza') {
-      try {
-        console.log('Payaza failed, falling back to Paystack');
-        
-        // Check if partner has Paystack setup
-        const partner = await Partner.findById(req.body.companyId || req.body.bookingData?.companyId);
-        if (!partner || !partner.paystackSubaccountCode) {
-          return res.status(400).json({ error: 'Payment provider unavailable. Please contact support.' });
-        }
-
-        // Retry with Paystack
-        paymentService.switchProvider('paystack');
-        const { email, amount, bookingData } = req.body;
-        const amountInKobo = Math.round(amount * 100);
-        const paystackPayload = {
-          email,
-          amount: amountInKobo,
-          currency: 'NGN',
-          callback_url: FRONTEND_URL,
-          metadata: {
-            bookingData: JSON.stringify(bookingData),
-            companyId: partner._id,
-            custom_fields: [
-              { display_name: 'Company', variable_name: 'company', value: partner.companyName },
-              { display_name: 'Route', variable_name: 'route', value: bookingData.routeTo || '' },
-            ],
-          },
-          subaccount: partner.paystackSubaccountCode,
-          bearer: 'account',
-        };
-
-        const response = await axios.post(
-          'https://api.paystack.co/transaction/initialize',
-          paystackPayload,
-          { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, 'Content-Type': 'application/json' } }
-        );
-
-        if (!response.data.status) return res.status(400).json({ error: response.data.message });
-
-        return res.json({
-          authorization_url: response.data.data.authorization_url,
-          access_code: response.data.data.access_code,
-          reference: response.data.data.reference,
-          provider: 'paystack'
-        });
-      } catch (fallbackError) {
-        console.error('Paystack fallback also failed:', fallbackError.message);
-      }
-    }
-
-    res.status(500).json({ error: errData?.message || error.message });
+    return res.status(500).json({ error: errData?.message || error.message });
   }
 });
 
@@ -183,72 +85,35 @@ router.get('/verify/:reference', async (req, res) => {
     }
 
     let transaction;
-    let provider = 'paystack'; // Default
+    const provider = 'payaza';
 
-    // Try Payaza first if configured
-    if (paymentService.getCurrentProvider() === 'payaza') {
-      try {
-        console.log(`Verifying Payaza transaction: ${reference}`);
-        const payazaResponse = await paymentService.getTransactionStatus(reference);
-        
-        if (payazaResponse && (payazaResponse.status === 'success' || payazaResponse.success)) {
-          transaction = {
-            status: 'success',
-            reference,
-            amount: payazaResponse.amount || 0,
-            customer: { email: payazaResponse.email || payazaResponse.customer?.email || '' },
-            metadata: payazaResponse.metadata || payazaResponse.service_payload || {}
-          };
-          provider = 'payaza';
-          console.log(`✓ Payaza transaction verified successfully`);
-        } else {
-          console.warn(`Payaza transaction status not success: ${payazaResponse?.status}`);
-          // Fall through to Paystack fallback
-        }
-      } catch (payazaError) {
-        console.error('Payaza verification error:', {
-          message: payazaError.message,
-          status: payazaError.response?.status,
-          data: payazaError.response?.data
-        });
-        
-        // Try Paystack as fallback if Payaza fails
-        console.log(`Payaza failed, attempting Paystack fallback for reference: ${reference}`);
-        if (!PAYSTACK_SECRET) {
-          return res.status(400).json({
-            error: 'Payment provider unavailable. Please contact support.'
-          });
-        }
+    // Payaza-only verification
+    try {
+      console.log(`Verifying Payaza transaction: ${reference}`);
+      const payazaResponse = await paymentService.getTransactionStatus(reference);
+
+      if (payazaResponse && (payazaResponse.status === 'success' || payazaResponse.success)) {
+        transaction = {
+          status: 'success',
+          reference,
+          amount: payazaResponse.amount || 0,
+          customer: { email: payazaResponse.email || payazaResponse.customer?.email || '' },
+          metadata: payazaResponse.metadata || payazaResponse.service_payload || {}
+        };
+        console.log(`✓ Payaza transaction verified successfully`);
+      } else {
+        console.warn(`Payaza transaction status not success: ${payazaResponse?.status}`);
+        return res.status(400).json({ error: `Payment not successful. Status: ${payazaResponse?.status || 'unknown'}` });
       }
-    }
-
-    // Fallback to Paystack - try if Payaza didn't work or is not configured
-    if (!transaction) {
-      try {
-        console.log(`Verifying with Paystack: ${reference}`);
-        const response = await axios.get(
-          `https://api.paystack.co/transaction/verify/${reference}`,
-          { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } }
-        );
-
-        if (!response.data.status || !response.data.data) {
-          console.warn('Paystack verification returned false status');
-          return res.status(400).json({ error: 'Payment verification failed. Transaction not found.' });
-        }
-        
-        transaction = response.data.data;
-        provider = 'paystack';
-        console.log(`✓ Paystack transaction verified successfully`);
-      } catch (paystackError) {
-        console.error('Paystack verification error:', {
-          message: paystackError.message,
-          status: paystackError.response?.status,
-          data: paystackError.response?.data
-        });
-        return res.status(400).json({
-          error: paystackError.response?.data?.message || 'Payment reference not found or expired. Please complete payment and try again.'
-        });
-      }
+    } catch (payazaError) {
+      console.error('Payaza verification error:', {
+        message: payazaError.message,
+        status: payazaError.response?.status,
+        data: payazaError.response?.data
+      });
+      return res.status(400).json({
+        error: payazaError.response?.data?.message || 'Payment verification failed. Please complete payment and try again.'
+      });
     }
 
     if (transaction.status !== 'success') {

@@ -1,8 +1,10 @@
 const axios = require('axios');
 
 class PaymentService {
-  constructor() {
-    this.provider = process.env.PAYMENT_PROVIDER || 'payaza';
+// NOTE: Paystack is intentionally disabled.
+// Vaamoose payments must use Payaza only.
+constructor() {
+    this.provider = 'payaza';
     this.payaza = {
       apiKey: process.env.PAYAZA_API_KEY,
       baseUrl: process.env.PAYAZA_BASE_URL || 'https://api.payaza.africa/live',
@@ -15,13 +17,9 @@ class PaymentService {
     };
   }
 
-  // Card Charge
-  async chargeCard(cardData) {
-    if (this.provider === 'payaza') {
-      return this.payazaChargeCard(cardData);
-    } else {
-      return this.paystackChargeCard(cardData);
-    }
+// Card Charge (Payaza only)
+async chargeCard(cardData) {
+    return this.payazaChargeCard(cardData);
   }
 
   async payazaChargeCard(cardData) {
@@ -64,42 +62,14 @@ class PaymentService {
     }
   }
 
-  async paystackChargeCard(cardData) {
-    // Fallback to Paystack implementation
-    const amountInKobo = Math.round(cardData.amount * 100);
-    const payload = {
-      email: cardData.email,
-      amount: amountInKobo,
-      card: {
-        number: cardData.card.cardNumber,
-        cvv: cardData.card.securityCode,
-        expiry_month: cardData.card.expiryMonth,
-        expiry_year: cardData.card.expiryYear
-      },
-      pin: cardData.pin // If required
-    };
-
-    const response = await axios.post(
-      `${this.paystack.baseUrl}/charge`,
-      payload,
-      {
-        headers: {
-          'Authorization': `Bearer ${this.paystack.secretKey}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    return response.data;
+// Disabled: Paystack card charging
+async paystackChargeCard() {
+    throw new Error('Paystack is disabled. Use Payaza only.');
   }
 
-  // Transaction Status
-  async getTransactionStatus(reference) {
-    if (this.provider === 'payaza') {
-      return this.payazaTransactionStatus(reference);
-    } else {
-      return this.paystackTransactionStatus(reference);
-    }
+// Transaction Status (Payaza only)
+async getTransactionStatus(reference) {
+    return this.payazaTransactionStatus(reference);
   }
 
   async payazaTransactionStatus(reference) {
@@ -147,27 +117,14 @@ class PaymentService {
     }
   }
 
-  async paystackTransactionStatus(reference) {
-    const response = await axios.get(
-      `${this.paystack.baseUrl}/transaction/verify/${reference}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${this.paystack.secretKey}`
-        }
-      }
-    );
-
-    return response.data;
+// Disabled: Paystack transaction status
+async paystackTransactionStatus() {
+    throw new Error('Paystack is disabled. Use Payaza only.');
   }
 
-  // Mobile Money Collection
-  async processMobileMoneyCollection(collectionData) {
-    if (this.provider === 'payaza') {
-      return this.payazaMobileMoneyCollection(collectionData);
-    } else {
-      // Paystack doesn't have direct mobile money, use their bank transfer or fallback
-      throw new Error('Mobile money collection not available with Paystack');
-    }
+// Mobile Money Collection (Payaza only)
+async processMobileMoneyCollection(collectionData) {
+    return this.payazaMobileMoneyCollection(collectionData);
   }
 
   async payazaMobileMoneyCollection(collectionData) {
@@ -276,12 +233,9 @@ class PaymentService {
   }
 
   // Transfers/Payouts
-  async initiateTransfer(transferData) {
-    if (this.provider === 'payaza') {
-      return this.payazaTransfer(transferData);
-    } else {
-      return this.paystackTransfer(transferData);
-    }
+// Transfers/Payout (Payaza only)
+async initiateTransfer(transferData) {
+    return this.payazaTransfer(transferData);
   }
 
   async payazaTransfer(transferData) {
@@ -317,36 +271,14 @@ class PaymentService {
     }
   }
 
-  async paystackTransfer(transferData) {
-    // Paystack transfer implementation
-    const payload = {
-      source: 'balance',
-      amount: Math.round(transferData.payout_amount * 100),
-      recipient: transferData.recipient_code, // Assuming recipient code is provided
-      reason: transferData.narration || 'Transfer'
-    };
-
-    const response = await axios.post(
-      `${this.paystack.baseUrl}/transfer`,
-      payload,
-      {
-        headers: {
-          'Authorization': `Bearer ${this.paystack.secretKey}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    return response.data;
+// Disabled: Paystack transfers
+async paystackTransfer() {
+    throw new Error('Paystack is disabled. Use Payaza only.');
   }
 
-  // Account Enquiry
-  async accountEnquiry(enquiryData) {
-    if (this.provider === 'payaza') {
-      return this.payazaAccountEnquiry(enquiryData);
-    } else {
-      return this.paystackAccountEnquiry(enquiryData);
-    }
+// Account Enquiry (Payaza only)
+async accountEnquiry(enquiryData) {
+    return this.payazaAccountEnquiry(enquiryData);
   }
 
   async payazaAccountEnquiry(enquiryData) {
@@ -378,21 +310,9 @@ class PaymentService {
     }
   }
 
-  async paystackAccountEnquiry(enquiryData) {
-    const response = await axios.get(
-      `${this.paystack.baseUrl}/bank/resolve`,
-      {
-        params: {
-          account_number: enquiryData.account_number,
-          bank_code: enquiryData.bank_code
-        },
-        headers: {
-          'Authorization': `Bearer ${this.paystack.secretKey}`
-        }
-      }
-    );
-
-    return response.data;
+// Disabled: Paystack account enquiry
+async paystackAccountEnquiry() {
+    throw new Error('Paystack is disabled. Use Payaza only.');
   }
 
   // Virtual Accounts
@@ -469,13 +389,9 @@ class PaymentService {
     }
   }
 
-  // Transfer Notification Query
-  async queryTransferNotification(transactionReference) {
-    if (this.provider === 'payaza') {
-      return this.payazaQueryTransferNotification(transactionReference);
-    } else {
-      return this.paystackTransactionStatus(transactionReference);
-    }
+// Transfer Notification Query (Payaza only)
+async queryTransferNotification(transactionReference) {
+    return this.payazaQueryTransferNotification(transactionReference);
   }
 
   async payazaQueryTransferNotification(transactionReference) {
@@ -499,14 +415,12 @@ class PaymentService {
     }
   }
 
-  // Switch provider
-  switchProvider(provider) {
-    if (provider === 'payaza' || provider === 'paystack') {
-      this.provider = provider;
-      console.log(`Switched payment provider to: ${provider}`);
-    } else {
-      throw new Error('Invalid provider. Use "payaza" or "paystack"');
+// Switch provider (Paystack disabled)
+switchProvider(provider) {
+    if (provider !== 'payaza') {
+      throw new Error('Invalid provider. Only "payaza" is allowed.');
     }
+    this.provider = 'payaza';
   }
 
   // Get current provider
