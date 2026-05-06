@@ -5,8 +5,9 @@ class PaymentService {
 // Vaamoose payments must use Payaza only.
 constructor() {
     this.provider = 'payaza';
-    this.payaza = {
-      apiKey: process.env.PAYAZA_API_KEY,
+// NOTE: Your .env currently defines PAYAZA_API_SECRET_KEY (not PAYAZA_API_KEY)
+this.payaza = {
+      apiKey: process.env.PAYAZA_API_SECRET_KEY || process.env.PAYAZA_API_SECRET_KEY,
       baseUrl: process.env.PAYAZA_BASE_URL || 'https://api.payaza.africa/live',
       tenantId: process.env.PAYAZA_TENANT_ID,
       productId: process.env.PAYAZA_PRODUCT_ID || 'app'
@@ -44,6 +45,8 @@ async chargeCard(cardData) {
         }
       };
 
+      console.log(`[Payaza] Charging card for reference: ${cardData.reference}, amount: ${cardData.amount}`);
+
       const response = await axios.post(
         `${this.payaza.baseUrl}/card/card_charge/`,
         payload,
@@ -51,13 +54,28 @@ async chargeCard(cardData) {
           headers: {
             'Authorization': `Payaza ${this.payaza.apiKey}`,
             'Content-Type': 'application/json'
-          }
+          },
+          timeout: 30000 // 30 second timeout for card charge
         }
       );
 
+      console.log(`[Payaza] Card charge response for ${cardData.reference}:`, {
+        status: response.status,
+        dataKeys: Object.keys(response.data || {}),
+        success: response.data?.success || response.data?.status === 'success'
+      });
+
       return response.data;
     } catch (error) {
-      console.error('Payaza card charge error:', error.response?.data || error.message);
+      const errorMessage = error.response?.data?.message || error.message;
+      const errorStatus = error.response?.status;
+      
+      console.error('[Payaza] Card charge error:', {
+        message: errorMessage,
+        status: errorStatus,
+        reference: cardData.reference,
+        data: error.response?.data
+      });
       throw error;
     }
   }
@@ -100,20 +118,35 @@ async getTransactionStatus(reference) {
 
       console.log(`[Payaza] Transaction status response:`, {
         status: response.status,
+        statusCode: response.status,
         dataKeys: Object.keys(response.data || {})
       });
 
       return response.data;
     } catch (error) {
+      const errorData = error.response?.data || {};
+      const errorStatus = error.response?.status;
+      const errorMessage = error.response?.data?.message || error.message || 'Unknown error';
+      
       const errorDetails = {
-        message: error.message,
-        status: error.response?.status,
+        message: errorMessage,
+        status: errorStatus,
         statusText: error.response?.statusText,
-        data: error.response?.data,
-        reference
+        data: errorData,
+        reference,
+        isNotFound: errorMessage.includes('not found') || errorMessage.includes('Transaction not found') || errorStatus === 404
       };
+      
       console.error('[Payaza] Transaction status error:', errorDetails);
-      throw error;
+      
+      // Create error with preserved details for caller
+      const err = new Error(errorMessage);
+      err.response = {
+        status: errorStatus,
+        statusText: error.response?.statusText,
+        data: errorData
+      };
+      throw err;
     }
   }
 

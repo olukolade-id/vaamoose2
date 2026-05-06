@@ -77,19 +77,30 @@ router.get('/verify/:reference', async (req, res) => {
       return res.status(400).json({ error: 'Payment reference is required' });
     }
 
-    // Check if booking already exists
+    // CHECK LOCAL DATABASE FIRST
     const existing = await Booking.findOne({ paymentReference: reference });
-    if (existing) {
-      console.log(`Booking already exists for reference: ${reference}`);
-      return res.json({ success: true, booking: existing });
+    if (existing && existing.paymentStatus === 'paid') {
+      console.log(`✓ Booking already exists and paid for reference: ${reference}`);
+      return res.json({ success: true, booking: existing, message: 'Payment already verified' });
+    }
+    if (existing && existing.paymentStatus !== 'paid') {
+      console.log(`⚠ Booking exists but payment not completed for reference: ${reference}`);
+      return res.status(400).json({ error: 'Payment not completed for this reference' });
     }
 
+    // If NO BOOKING EXISTS, the payment was likely NOT processed through card-charge endpoint
+    // This means the user either:
+    // 1. Didn't complete the payment
+    // 2. The reference is invalid
+    // 3. They're trying to manually verify without payment
+    console.warn(`No booking found for reference: ${reference}. Payment may not have been processed.`);
+    
     let transaction;
     const provider = 'payaza';
 
-    // Payaza-only verification
+    // Try to verify with Payaza as a fallback
     try {
-      console.log(`Verifying Payaza transaction: ${reference}`);
+      console.log(`Attempting Payaza verification for reference: ${reference}`);
       const payazaResponse = await paymentService.getTransactionStatus(reference);
 
       if (payazaResponse && (payazaResponse.status === 'success' || payazaResponse.success)) {
@@ -106,13 +117,29 @@ router.get('/verify/:reference', async (req, res) => {
         return res.status(400).json({ error: `Payment not successful. Status: ${payazaResponse?.status || 'unknown'}` });
       }
     } catch (payazaError) {
+      const errorMsg = payazaError.response?.data?.message || payazaError.message || '';
+      const errorStatus = payazaError.response?.status;
+      
+      // Handle "transaction not found" errors
+      if (errorMsg.includes('not found') || errorMsg.includes('Transaction not found') || errorStatus === 404) {
+        console.error('Transaction not found in Payaza:', {
+          reference,
+          message: errorMsg,
+          status: errorStatus
+        });
+        return res.status(404).json({
+          error: 'Payment reference not found. Please ensure you have completed the payment and try again.',
+          details: 'If you completed the payment, the booking should have been created automatically. Contact support with this reference.'
+        });
+      }
+      
       console.error('Payaza verification error:', {
-        message: payazaError.message,
-        status: payazaError.response?.status,
+        message: errorMsg,
+        status: errorStatus,
         data: payazaError.response?.data
       });
       return res.status(400).json({
-        error: payazaError.response?.data?.message || 'Payment verification failed. Please complete payment and try again.'
+        error: errorMsg || 'Payment verification failed. Please ensure payment was completed and try again.'
       });
     }
 
@@ -383,6 +410,15 @@ router.post('/payaza/card-charge', async (req, res) => {
         </div>`
       );
 
+      console.log(`✓ Booking created successfully for reference: ${reference}`);
+      
+      // Send admin notification email
+      sendEmail(
+        process.env.ADMIN_EMAIL || 'olukoladeidowu@gmail.com',
+        `💰 New Booking — ${bookingData?.companyName} | ₦${amount.toLocaleString('en-NG')}`,
+        `<div style="font-family:sans-serif;max-width:520px"><h2 style="color:#2563eb">New Booking via Payaza</h2><p>Reference: ${refUpper}</p><p>Email: ${email}</p><p>Amount: ₦${amount.toLocaleString('en-NG')}</p></div>`
+      ).catch(e => console.error('Failed to send admin email:', e.message));
+
       return res.json({
         success: true,
         booking,
@@ -390,14 +426,35 @@ router.post('/payaza/card-charge', async (req, res) => {
         message: 'Payment successful and booking created!'
       });
     } else {
+      console.warn(`Card charge failed for reference ${reference}:`, chargeResult);
       return res.status(400).json({
         success: false,
-        error: chargeResult.message || 'Card charge failed'
+        error: chargeResult.message || 'Card charge failed. Please try again or contact support.'
       });
     }
   } catch (error) {
-    console.error('Card charge error:', error.message);
-    res.status(500).json({ success: false, error: error.message });
+    const errorMessage = error.response?.data?.message || error.message;
+    const errorStatus = error.response?.status;
+    
+    console.error('Card charge error:', {
+      message: errorMessage,
+      status: errorStatus,
+      reference: req.body.reference,
+      email: req.body.email
+    });
+    
+    // Return more informative error messages
+    if (errorStatus === 400 || errorStatus === 401) {
+      return res.status(400).json({
+        success: false,
+        error: 'Card declined or invalid. Please check your card details and try again.'
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      error: errorMessage || 'Payment processing failed. Please try again or contact support.'
+    });
   }
 });
 
