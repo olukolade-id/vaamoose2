@@ -42,6 +42,21 @@ app.use('/api/delivery-agents', deliveryAgentRoutes);
 app.use('/api/delivery', deliveryRoutes);
 app.use('/api/ai', aiRoutes);
 
+// Webhook routes (raw body for signature verification)
+app.post('/webhooks/payaza', express.raw({ type: 'application/json' }), (req, res) => {
+  const { payazaWebhookHandler } = require('./routes/webhookHandler');
+  // Convert raw body back to JSON for handler
+  if (typeof req.body === 'string') {
+    req.body = JSON.parse(req.body);
+  }
+  payazaWebhookHandler(req, res);
+});
+
+app.post('/webhooks/paystack', express.json(), (req, res) => {
+  const { paystackWebhookHandler } = require('./routes/webhookHandler');
+  paystackWebhookHandler(req, res);
+});
+
 // MongoDB connection
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))

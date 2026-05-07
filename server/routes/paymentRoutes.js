@@ -1,10 +1,249 @@
+/**
+ * Payment Routes
+ * All Vaamoose payment endpoints
+ * Mount at: app.use('/api/payment', paymentRoutes)
+ * Supports: Payaza (primary) + Paystack (fallback or explicit selection)
+ */
+
 const express = require('express');
 const router = express.Router();
-const axios = require('axios');
-const { Resend } = require('resend');
+const { v4: uuidv4 } = require('uuid');
+const {
+  createVirtualAccount,
+  chargeCard,
+  authorizeCard,
+  captureCard,
+  voidCard,
+  chargeMobileMoney,
+  getMomoStatus,
+  bankEnquiry,
+  getTransactionStatus,
+  refundTransaction,
+  PaymentError,
+} = require('../utils/paymentProvider');
 const Booking = require('../models/Booking');
-const Partner = require('../models/Partner');
-const paymentService = require('../utils/paymentService');
+const { Resend } = require('resend');
+
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://vaamoose.online';
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const genRef = (prefix = 'VMO') => `${prefix}-${uuidv4().split('-')[0].toUpperCase()}-${Date.now()}`;
+
+const asyncHandler = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
+
+const sendEmail = async (to, subject, html) => {
+  try {
+    await resend.emails.send({ from: 'Vaamoose <onboarding@resend.dev>', to, subject, html });
+  } catch (e) {
+    console.error(`Email error to ${to}:`, e.message);
+  }
+};
+
+// ─── Error middleware ─────────────────────────────────────────────────────────
+router.use((err, req, res, next) => {
+  if (err instanceof PaymentError) {
+    return res.status(502).json({ success: false, message: err.message, errors: err.errors });
+  }
+  console.error('[PaymentRoute Error]', err);
+  res.status(500).json({ success: false, message: 'Internal payment error' });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  POST /api/payment/virtual-account
+//  Creates a dynamic virtual account for bank transfer checkout
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post('/virtual-account', asyncHandler(async (req, res) => {
+  const { amount, currency = 'NGN', customer, type = 'Dynamic', expiresInMinutes = 30, provider } = req.body;
+
+  if (!amount || !customer?.email || !customer?.firstName) {
+    return res.status(400).json({ success: false, message: 'Missing: amount, customer.email, customer.firstName' });
+  }
+
+  const reference = genRef('VA');
+  const result = await createVirtualAccount({ amount, currency, customer, reference, type, expiresInMinutes, provider });
+
+  res.json({ success: true, data: result });
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  POST /api/payment/card/charge
+//  Direct card charge (with or without booking creation)
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post('/card/charge', asyncHandler(async (req, res) => {
+  const { amount, currency = 'NGN', customer, card, description, bookingData, provider } = req.body;
+
+  if (!amount || !customer?.email || !card?.number || !card?.cvv) {
+    return res.status(400).json({ success: false, message: 'Missing required card fields' });
+  }
+
+  const reference = genRef('CRD');
+  const result = await chargeCard({
+    amount, currency, customer, card, reference, description,
+    callbackUrl: `${FRONTEND_URL}/api/payment/callback`,
+    provider,
+  });
+
+  // If payment successful and bookingData provided, create booking
+  if ((result.status === 'success' || result.raw?.status === 'success') && bookingData) {
+    try {
+      const booking = new Booking({
+        schoolId: bookingData.schoolId,
+        schoolName: bookingData.schoolName,
+        companyId: bookingData.companyId,
+        companyName: bookingData.companyName,
+        userEmail: customer.email,
+        vehicleId: bookingData.vehicleId,
+        vehicleName: bookingData.vehicleName,
+        route: bookingData.routeTo || bookingData.route || 'N/A',
+        pickupLocation: bookingData.pickupLocation || '',
+        departureDate: bookingData.departureDate || new Date(),
+        departureTime: bookingData.departureTime || 'N/A',
+        seats: bookingData.seats || [],
+        price: bookingData.totalPrice || amount,
+        luggagePhotos: bookingData.luggagePhotos || [],
+        paymentStatus: 'paid',
+        paymentReference: reference,
+        paymentProvider: result.provider,
+        paidAt: new Date(),
+        amountPaid: amount,
+      });
+
+      await booking.save();
+
+      // Send confirmation emails asynchronously
+      const seatList = (bookingData.seats || []).map(s => `Row ${s.row} Seat ${s.column}`).join(', ') || 'N/A';
+      const formattedAmount = `₦${amount.toLocaleString('en-NG')}`;
+      const refUpper = reference.toUpperCase();
+
+      sendEmail(
+        customer.email,
+        `Booking Confirmed ✅ — ${bookingData.companyName} to ${bookingData.routeTo}`,
+        `<div style="font-family:sans-serif"><h2>Booking Confirmed!</h2><p>Reference: ${refUpper}</p><p>Amount: ${formattedAmount}</p></div>`
+      );
+    } catch (dbErr) {
+      console.error('Booking save error:', dbErr.message);
+    }
+  }
+
+  res.json({ success: true, data: result });
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  POST /api/payment/card/authorize
+//  Auth only — don't capture yet
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post('/card/authorize', asyncHandler(async (req, res) => {
+  const { amount, currency = 'NGN', customer, card, provider = 'payaza' } = req.body;
+  const reference = genRef('AUTH');
+  const result = await authorizeCard({ amount, currency, customer, card, reference, provider });
+  res.json({ success: true, data: result });
+}));
+
+// ─── POST /api/payment/card/capture ──────────────────────────────────────────
+router.post('/card/capture', asyncHandler(async (req, res) => {
+  const { reference, amount } = req.body;
+  if (!reference) return res.status(400).json({ success: false, message: 'reference required' });
+  const result = await captureCard({ reference, amount });
+  res.json({ success: true, data: result });
+}));
+
+// ─── POST /api/payment/card/void ─────────────────────────────────────────────
+router.post('/card/void', asyncHandler(async (req, res) => {
+  const { reference } = req.body;
+  if (!reference) return res.status(400).json({ success: false, message: 'reference required' });
+  const result = await voidCard({ reference });
+  res.json({ success: true, data: result });
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  POST /api/payment/momo
+//  Mobile Money charge (Ghana, Kenya, Tanzania, Uganda)
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post('/momo', asyncHandler(async (req, res) => {
+  const { amount, currency, customer, mobileNumber, network, countryCode, provider } = req.body;
+
+  const networkBankCodeMap = {
+    MTN: 'MTN', Airtel: 'AIR', Vodafone: 'VOD', Tigo: 'TGO',
+  };
+  const bankCode = networkBankCodeMap[network] || network;
+
+  if (!amount || !mobileNumber || !countryCode) {
+    return res.status(400).json({ success: false, message: 'amount, mobileNumber, countryCode required' });
+  }
+
+  const reference = genRef('MOMO');
+  const result = await chargeMobileMoney({ amount, currency, customer, mobileNumber, bankCode, countryCode, reference, provider });
+  res.json({ success: true, data: result });
+}));
+
+// ─── GET /api/payment/momo/status ────────────────────────────────────────────
+router.get('/momo/status', asyncHandler(async (req, res) => {
+  const { reference, countryCode } = req.query;
+  if (!reference || !countryCode) {
+    return res.status(400).json({ success: false, message: 'reference and countryCode required' });
+  }
+  const result = await getMomoStatus({ reference, countryCode });
+  res.json({ success: true, data: result });
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GET /api/payment/status/:reference
+//  Check any transaction status
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/status/:reference', asyncHandler(async (req, res) => {
+  const { reference } = req.params;
+  const { provider = 'payaza' } = req.query;
+  const result = await getTransactionStatus({ reference, provider });
+  res.json({ success: true, data: result });
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GET /api/payment/bank/enquiry
+//  Resolve account name before transfer
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post('/bank/enquiry', asyncHandler(async (req, res) => {
+  const { accountNumber, bankCode, currency = 'NGN', provider } = req.body;
+  if (!accountNumber || !bankCode) {
+    return res.status(400).json({ success: false, message: 'accountNumber and bankCode required' });
+  }
+  const result = await bankEnquiry({ accountNumber, bankCode, currency, provider });
+  res.json({ success: true, data: result });
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  POST /api/payment/refund
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post('/refund', asyncHandler(async (req, res) => {
+  const { reference, amount, reason, provider } = req.body;
+  if (!reference) return res.status(400).json({ success: false, message: 'reference required' });
+  const result = await refundTransaction({ reference, amount, reason, provider });
+  res.json({ success: true, data: result });
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GET /api/payment/callback
+//  Redirect URL after card/checkout completes
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/callback', asyncHandler(async (req, res) => {
+  const { reference, status, trxref } = req.query;
+  const ref = reference || trxref;
+
+  if (!ref) return res.redirect(`${FRONTEND_URL}/payment/error?msg=no_reference`);
+
+  try {
+    const result = await getTransactionStatus({ reference: ref });
+    if (result.status === 'success' || result.status === 'successful') {
+      return res.redirect(`${FRONTEND_URL}/payment/success?reference=${ref}`);
+    }
+    return res.redirect(`${FRONTEND_URL}/payment/failed?reference=${ref}`);
+  } catch {
+    return res.redirect(`${FRONTEND_URL}/payment/error?reference=${ref}`);
+  }
+}));
+
+module.exports = router;
 
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://vaamoose.online';
@@ -580,7 +819,398 @@ router.post('/switch-provider', async (req, res) => {
 
 // Get Current Provider
 router.get('/current-provider', (req, res) => {
-  res.json({ provider: paymentService.getCurrentProvider() });
+  res.json({ provider: paymentProvider.config.payaza.apiKey ? 'payaza' : 'paystack' });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  NEW: Unified Payment Endpoints (Payaza + Paystack)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/payment/virtual-account
+ * Create a dynamic virtual account for bank transfer
+ */
+router.post('/virtual-account', async (req, res) => {
+  try {
+    const { amount, currency = 'NGN', customer, bookingData } = req.body;
+    const reference = `VAAMO-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    if (!amount || !customer?.email) {
+      return res.status(400).json({ error: 'Missing amount or customer email' });
+    }
+
+    const result = await paymentProvider.createVirtualAccount({
+      amount,
+      currency,
+      customer: {
+        firstName: customer.firstName || 'Customer',
+        lastName: customer.lastName || '',
+        email: customer.email,
+        phone: customer.phone || '',
+      },
+      reference,
+      expiresInMinutes: 30,
+    });
+
+    res.json({ ...result, reference, bookingData });
+  } catch (error) {
+    console.error('Virtual account creation error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/payment/charge
+ * Charge card with optional OTP
+ */
+router.post('/charge', async (req, res) => {
+  try {
+    const { amount, currency = 'NGN', customer, card, method = 'card', bookingData } = req.body;
+    const reference = `VAAMO-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    if (!amount || !customer?.email || !card) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const result = await paymentProvider.chargeCard({
+      amount,
+      currency,
+      customer: {
+        firstName: card.cardHolderName?.split(' ')[0] || customer.firstName || 'Customer',
+        lastName: card.cardHolderName?.split(' ')[1] || customer.lastName || '',
+        email: customer.email,
+        phone: customer.phone || '',
+      },
+      card: {
+        number: card.cardNumber,
+        expiryMonth: card.expiryMonth,
+        expiryYear: card.expiryYear,
+        cvv: card.cvv,
+      },
+      reference,
+      description: 'Vaamoose Booking',
+    });
+
+    // If payment successful, create booking
+    if (result.status === 'success' || result.raw?.status === 'success') {
+      const booking = new Booking({
+        schoolId: bookingData?.schoolId,
+        schoolName: bookingData?.schoolName,
+        companyId: bookingData?.companyId,
+        companyName: bookingData?.companyName,
+        userEmail: customer.email,
+        vehicleId: bookingData?.vehicleId,
+        vehicleName: bookingData?.vehicleName,
+        route: bookingData?.routeTo || bookingData?.route || 'N/A',
+        pickupLocation: bookingData?.pickupLocation || '',
+        departureDate: bookingData?.departureDate || new Date(),
+        departureTime: bookingData?.departureTime || 'N/A',
+        seats: bookingData?.seats || [],
+        price: bookingData?.totalPrice || amount,
+        luggagePhotos: bookingData?.luggagePhotos || [],
+        paymentStatus: 'paid',
+        paymentReference: reference,
+        paymentProvider: result.provider,
+        paidAt: new Date(),
+        amountPaid: amount,
+      });
+
+      await booking.save();
+
+      // Send emails asynchronously
+      const seatList = (bookingData?.seats || []).map(s => `Row ${s.row} Seat ${s.column}`).join(', ') || 'N/A';
+      const formattedAmount = `₦${amount.toLocaleString('en-NG')}`;
+      const refUpper = reference.toUpperCase();
+
+      sendEmail(
+        customer.email,
+        `Booking Confirmed ✅ — ${bookingData?.companyName} to ${bookingData?.routeTo}`,
+        generateBookingConfirmationEmail(bookingData, refUpper, formattedAmount, seatList)
+      ).catch(e => console.error('Email error:', e.message));
+
+      res.json({ success: true, booking, reference, provider: result.provider });
+    } else {
+      res.status(400).json({ error: 'Payment declined', result });
+    }
+  } catch (error) {
+    console.error('Charge error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/payment/card/authorize
+ * Authorize card (hold funds)
+ */
+router.post('/card/authorize', async (req, res) => {
+  try {
+    const { amount, currency = 'NGN', customer, card } = req.body;
+    const reference = `AUTH-${Date.now()}`;
+
+    const result = await paymentProvider.authorizeCard({
+      amount,
+      currency,
+      customer: {
+        firstName: customer.firstName || 'Customer',
+        lastName: customer.lastName || '',
+        email: customer.email,
+        phone: customer.phone || '',
+      },
+      card: {
+        number: card.cardNumber,
+        expiryMonth: card.expiryMonth,
+        expiryYear: card.expiryYear,
+        cvv: card.cvv,
+      },
+      reference,
+    });
+
+    res.json({ ...result, reference });
+  } catch (error) {
+    console.error('Card authorization error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/payment/card/capture
+ * Capture previously authorized funds
+ */
+router.post('/card/capture', async (req, res) => {
+  try {
+    const { reference, amount } = req.body;
+
+    if (!reference || !amount) {
+      return res.status(400).json({ error: 'Missing reference or amount' });
+    }
+
+    const result = await paymentProvider.captureCard({ reference, amount });
+    res.json(result);
+  } catch (error) {
+    console.error('Card capture error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/payment/card/void
+ * Void a card authorization
+ */
+router.post('/card/void', async (req, res) => {
+  try {
+    const { reference } = req.body;
+
+    if (!reference) {
+      return res.status(400).json({ error: 'Missing reference' });
+    }
+
+    const result = await paymentProvider.voidCard({ reference });
+    res.json(result);
+  } catch (error) {
+    console.error('Card void error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/payment/momo
+ * Charge mobile money
+ */
+router.post('/momo', async (req, res) => {
+  try {
+    const { amount, currency, customer, mobileNumber, bankCode, countryCode, bookingData } = req.body;
+    const reference = `MOMO-${Date.now()}`;
+
+    if (!amount || !mobileNumber || !bankCode) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const result = await paymentProvider.chargeMobileMoney({
+      amount,
+      currency: currency || 'GHS',
+      customer: {
+        firstName: customer.firstName || 'Customer',
+        lastName: customer.lastName || '',
+        email: customer.email || '',
+      },
+      mobileNumber,
+      bankCode,
+      countryCode: countryCode || 'GH',
+      reference,
+    });
+
+    res.json({ ...result, reference });
+  } catch (error) {
+    console.error('MoMo charge error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/payment/momo/status
+ * Check mobile money transaction status
+ */
+router.get('/momo/status', async (req, res) => {
+  try {
+    const { reference, countryCode = 'GH' } = req.query;
+
+    if (!reference) {
+      return res.status(400).json({ error: 'Missing reference' });
+    }
+
+    const result = await paymentProvider.getMomoStatus({ reference, countryCode });
+    res.json(result);
+  } catch (error) {
+    console.error('MoMo status error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/payment/bank/enquiry
+ * Resolve bank account name
+ */
+router.post('/bank/enquiry', async (req, res) => {
+  try {
+    const { accountNumber, bankCode, currency = 'NGN' } = req.body;
+
+    if (!accountNumber || !bankCode) {
+      return res.status(400).json({ error: 'Missing account number or bank code' });
+    }
+
+    const result = await paymentProvider.bankEnquiry({
+      accountNumber,
+      bankCode,
+      currency,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Bank enquiry error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/payment/status/:reference
+ * Get transaction status
+ */
+router.get('/status/:reference', async (req, res) => {
+  try {
+    const { reference } = req.params;
+    const { provider } = req.query;
+
+    if (!reference) {
+      return res.status(400).json({ error: 'Missing reference' });
+    }
+
+    const result = await paymentProvider.getTransactionStatus({
+      reference,
+      provider: provider || 'payaza',
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Status check error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/payment/refund
+ * Refund a transaction
+ */
+router.post('/refund', async (req, res) => {
+  try {
+    const { reference, amount, reason = 'Customer request', provider = 'payaza' } = req.body;
+
+    if (!reference || !amount) {
+      return res.status(400).json({ error: 'Missing reference or amount' });
+    }
+
+    const result = await paymentProvider.refundTransaction({
+      reference,
+      amount,
+      reason,
+      provider,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Refund error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/payment/callback
+ * Callback/redirect after checkout
+ */
+router.get('/callback', async (req, res) => {
+  try {
+    const { reference, status } = req.query;
+
+    if (!reference) {
+      return res.status(400).json({ error: 'Missing reference' });
+    }
+
+    const booking = await Booking.findOne({ paymentReference: reference });
+
+    if (!booking) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    res.json({
+      success: booking.paymentStatus === 'paid',
+      booking,
+      status: booking.paymentStatus,
+    });
+  } catch (error) {
+    console.error('Callback error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  WEBHOOKS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/payment/webhooks/payaza
+ * Handle Payaza webhooks
+ */
+router.post('/webhooks/payaza', payazaWebhookHandler);
+
+/**
+ * POST /api/payment/webhooks/paystack
+ * Handle Paystack webhooks
+ */
+router.post('/webhooks/paystack', paystackWebhookHandler);
+
+// ─── Helper Functions ─────────────────────────────────────────────────────────
+
+function generateBookingConfirmationEmail(bookingData, refUpper, formattedAmount, seatList) {
+  return `<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
+    <div style="background:linear-gradient(135deg,#2563eb,#4f46e5);padding:32px;border-radius:16px 16px 0 0;text-align:center">
+      <h1 style="color:white;margin:0;font-size:24px">Booking Confirmed! 🎉</h1>
+      <p style="color:#bfdbfe;margin:8px 0 0">Your ride is booked and payment received</p>
+    </div>
+    <div style="background:white;padding:32px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 16px 16px">
+      <table style="width:100%;border-collapse:collapse">
+        <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:10px 0;color:#64748b;font-size:14px">Company</td><td style="padding:10px 0;font-weight:600;color:#1e293b;font-size:14px">${bookingData?.companyName || 'N/A'}</td></tr>
+        <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:10px 0;color:#64748b;font-size:14px">From</td><td style="padding:10px 0;font-weight:600;color:#1e293b;font-size:14px">${bookingData?.schoolName || 'N/A'}</td></tr>
+        <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:10px 0;color:#64748b;font-size:14px">To</td><td style="padding:10px 0;font-weight:600;color:#1e293b;font-size:14px">${bookingData?.routeTo || 'N/A'}</td></tr>
+        <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:10px 0;color:#64748b;font-size:14px">Date</td><td style="padding:10px 0;font-weight:600;color:#1e293b;font-size:14px">${bookingData?.departureDate || 'N/A'}</td></tr>
+        <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:10px 0;color:#64748b;font-size:14px">Time</td><td style="padding:10px 0;font-weight:600;color:#1e293b;font-size:14px">${bookingData?.departureTime || 'N/A'}</td></tr>
+        <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:10px 0;color:#64748b;font-size:14px">Seats</td><td style="padding:10px 0;font-weight:600;color:#1e293b;font-size:14px">${seatList}</td></tr>
+        <tr style="border-bottom:1px solid #f1f5f9"><td style="padding:10px 0;color:#64748b;font-size:14px">Amount Paid</td><td style="padding:10px 0;font-weight:700;color:#2563eb;font-size:16px">${formattedAmount}</td></tr>
+      </table>
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px;margin:24px 0;text-align:center">
+        <p style="margin:0;font-size:13px;color:#166534">Your booking reference:</p>
+        <p style="margin:8px 0;font-family:monospace;font-size:22px;font-weight:bold;color:#15803d;letter-spacing:3px">${refUpper}</p>
+      </div>
+    </div>
+  </div>`;
+}
 
 module.exports = router;
