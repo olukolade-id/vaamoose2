@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -7,7 +6,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 export function CheckoutPage() {
-  const [searchParams] = useSearchParams();
   const [isLoading, setIsLoading] = useState(false);
   const [cardData, setCardData] = useState({
     cardNumber: '',
@@ -17,10 +15,12 @@ export function CheckoutPage() {
     cardHolderName: ''
   });
 
+  const searchParams = new URLSearchParams(window.location.search);
   const reference = searchParams.get('reference');
   const amount = searchParams.get('amount');
   const email = searchParams.get('email');
   const provider = searchParams.get('provider');
+  const bookingData = JSON.parse(localStorage.getItem('bookingData') || '{}');
 
   useEffect(() => {
     if (!reference || !amount || !email) {
@@ -74,10 +74,10 @@ export function CheckoutPage() {
 
         if (data.success) {
           toast.success('Payment successful!');
-          // Redirect to verification page
-          window.location.href = `/verify-receipt?reference=${reference}`;
+          localStorage.removeItem('bookingData');
+          window.location.href = `/?reference=${reference}`;
         } else {
-          toast.error(data.message || 'Payment failed');
+          toast.error(data.error || data.message || 'Payment failed');
         }
       }
     } catch (error) {
