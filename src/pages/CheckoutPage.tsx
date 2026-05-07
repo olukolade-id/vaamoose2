@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -7,7 +6,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 export function CheckoutPage() {
-  const [searchParams] = useSearchParams();
   const [isLoading, setIsLoading] = useState(false);
   const [cardData, setCardData] = useState({
     cardNumber: '',
@@ -18,10 +16,12 @@ export function CheckoutPage() {
   });
   const [bookingData, setBookingData] = useState<any>(null);
 
+  const searchParams = new URLSearchParams(window.location.search);
   const reference = searchParams.get('reference');
   const amount = searchParams.get('amount');
   const email = searchParams.get('email');
   const provider = searchParams.get('provider');
+  const bookingData = JSON.parse(localStorage.getItem('bookingData') || '{}');
 
   useEffect(() => {
     const storedBooking = localStorage.getItem('bookingData');
@@ -91,6 +91,10 @@ export function CheckoutPage() {
         if (data.success) {
           localStorage.removeItem('bookingData');
           toast.success('Payment successful!');
+<<<<<<< HEAD
+=======
+          localStorage.removeItem('bookingData');
+>>>>>>> 5e75070eca6ada9f77c351305f14bd607e710b89
           window.location.href = `/?reference=${reference}`;
         } else {
           toast.error(data.error || data.message || 'Payment failed');

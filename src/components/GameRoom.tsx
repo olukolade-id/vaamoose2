@@ -346,25 +346,22 @@ export function GameRoom({ bookingReference, playerName, onBack }: GameRoomProps
               </h3>
               <div className="space-y-2">
                 {GAMES.map(game => {
-                  const canPlay = (room?.players?.length || 0) >= game.minPlayers;
+                  const playerCount = room?.players?.length || 0;
+                  const needsMore = playerCount < game.minPlayers;
                   return (
                     <button
                       key={game.id}
-                      onClick={() => canPlay && startGame(game.id)}
-                      disabled={!canPlay}
-                      className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all text-left ${
-                        canPlay
-                          ? 'border-white/20 hover:border-blue-400 hover:bg-blue-500/20 cursor-pointer'
-                          : 'border-white/10 opacity-40 cursor-not-allowed'
-                      }`}
+                      onClick={() => startGame(game.id)}
+                      className="w-full flex items-center gap-4 p-4 rounded-xl border border-white/20 hover:border-blue-400 hover:bg-blue-500/20 cursor-pointer transition-all text-left"
                     >
                       <span className="text-2xl">{game.emoji}</span>
                       <div className="flex-1">
                         <p className="text-white font-semibold">{game.name}</p>
                         <p className="text-slate-400 text-xs">{game.desc}</p>
                       </div>
-                      {!canPlay && <span className="text-xs text-slate-500">Need {game.minPlayers}+ players</span>}
-                      {canPlay && <Play className="w-4 h-4 text-blue-400" />}
+                      {needsMore
+                        ? <span className="text-xs text-amber-400">Best with {game.minPlayers}+</span>
+                        : <Play className="w-4 h-4 text-blue-400" />}
                     </button>
                   );
                 })}
