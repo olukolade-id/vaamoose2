@@ -121,10 +121,45 @@ class PaymentService {
         }
       );
 
-      return response.data;
-    } catch (error) {
-      console.error('Payaza transaction status error:', error.response?.data || error.message);
-      throw error;
+      const status = response.data?.data?.status || response.data?.status;
+      return {
+        status: typeof status === 'string' ? status.toLowerCase() : status,
+        reference,
+        amount: response.data?.data?.amount || null,
+        email: response.data?.data?.email_address || response.data?.data?.customer?.email || null,
+        metadata: response.data?.data?.metadata || response.data?.data?.service_payload || null,
+        provider: 'payaza',
+        raw: response.data
+      };
+    } catch (firstError) {
+      console.warn('Payaza card status lookup failed, trying transfer notification query:', firstError.response?.data || firstError.message);
+      try {
+        const response = await axios.get(
+          `${this.payaza.baseUrl}/merchant-collection/transfer_notification_controller/transaction-query`,
+          {
+            params: {
+              transaction_reference: reference
+            },
+            headers: {
+              'Authorization': `Payaza ${this.payaza.apiKey}`
+            }
+          }
+        );
+
+        const status = response.data?.data?.status || response.data?.status;
+        return {
+          status: typeof status === 'string' ? status.toLowerCase() : status,
+          reference,
+          amount: response.data?.data?.amount || null,
+          email: response.data?.data?.email_address || response.data?.data?.customer?.email || null,
+          metadata: response.data?.data?.metadata || response.data?.data || null,
+          provider: 'payaza',
+          raw: response.data
+        };
+      } catch (secondError) {
+        console.error('Payaza transaction status error:', secondError.response?.data || secondError.message);
+        throw secondError;
+      }
     }
   }
 
