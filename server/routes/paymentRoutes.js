@@ -176,7 +176,7 @@ router.get('/verify/:reference', async (req, res) => {
     if (paymentService.getCurrentProvider() === 'payaza') {
       try {
         const payazaResponse = await paymentService.getTransactionStatus(reference);
-        if (payazaResponse && payazaResponse.status === 'success') {
+        if (payazaResponse && (payazaResponse.status === 'success' || payazaResponse.status === 'completed')) {
           transaction = {
             status: 'success',
             reference,
@@ -187,6 +187,18 @@ router.get('/verify/:reference', async (req, res) => {
           provider = 'payaza';
         }
       } catch (payazaError) {
+        // Check if error is "transaction_not_found" — this means payment is still pending or reference is local
+        const errorMsg = payazaError?.response?.data?.message || payazaError.message || '';
+        const isNotFound = errorMsg.includes('not found') || errorMsg.includes('does not exist');
+        
+        if (isNotFound) {
+          console.log(`[Payment Verify] Payaza reference "${reference}" not found - may be pending or local reference`);
+          return res.status(400).json({ 
+            error: 'Payment not yet confirmed. Please complete the payment process and try again.',
+            status: 'pending'
+          });
+        }
+        
         console.log('Payaza verification failed, trying Paystack:', payazaError.message);
       }
     }

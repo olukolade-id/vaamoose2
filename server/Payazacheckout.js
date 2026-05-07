@@ -56,7 +56,7 @@ function TransferPanel({ amount, currency, customer, onSuccess, onError }) {
   const timer = useCountdown(va ? 30 * 60 : 0);
 
   useEffect(() => {
-    apiFetch('/api/payments/virtual-account', {
+    apiFetch('/payment/payaza/virtual-account', {
       method: 'POST',
       body: JSON.stringify({ amount, currency, customer, type: 'Dynamic', expiresInMinutes: 30 }),
     })
@@ -68,8 +68,8 @@ function TransferPanel({ amount, currency, customer, onSuccess, onError }) {
   const handleConfirm = async () => {
     setChecking(true);
     try {
-      const result = await apiFetch(`/api/payments/status/${va.reference}`);
-      if (result.status === 'success' || result.status === 'successful') {
+      const result = await apiFetch(`/payment/verify/${va.reference}`);
+      if (result.success && result.booking) {
         onSuccess(result);
       } else {
         onError(new Error('Payment not yet confirmed. Please wait a moment and try again.'));
@@ -115,11 +115,21 @@ function CardPanel({ amount, currency, customer, onSuccess, onError }) {
     const [expiryMonth, expiryYear] = card.expiry.split('/');
     setLoading(true);
     try {
-      const result = await apiFetch('/api/payments/card/charge', {
+      const result = await apiFetch('/payment/payaza/card-charge', {
         method: 'POST',
         body: JSON.stringify({
-          amount, currency, customer,
-          card: { number: card.number, cvv: card.cvv, expiryMonth: expiryMonth?.trim(), expiryYear: expiryYear?.trim() },
+          reference: `CARD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          amount, 
+          email: customer?.email,
+          card: { 
+            cardNumber: card.number, 
+            cvv: card.cvv, 
+            expiryMonth: expiryMonth?.trim(), 
+            expiryYear: expiryYear?.trim(),
+            cardHolderName: customer?.name,
+            phoneNumber: customer?.phone
+          },
+          bookingData: customer?.bookingData
         }),
       });
       onSuccess(result);
@@ -204,9 +214,20 @@ function MomoPanel({ amount, currency, customer, onSuccess, onError }) {
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      const result = await apiFetch('/api/payments/momo', {
+      const result = await apiFetch('/payment/payaza/mobile-money-collection', {
         method: 'POST',
-        body: JSON.stringify({ amount, currency: currencyMap[country] || 'GHS', customer, mobileNumber: phone, network, countryCode: country }),
+        body: JSON.stringify({ 
+          amount, 
+          currency: currencyMap[country] || 'GHS', 
+          transaction_reference: `MOMO-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          customer_email: customer?.email,
+          customer_first_name: customer?.name?.split(' ')[0],
+          customer_last_name: customer?.name?.split(' ')[1],
+          customer_phone_number: phone,
+          country_code: country,
+          customer_bank_code: network,
+          transaction_description: 'Vaamoose Booking Payment'
+        }),
       });
       onSuccess(result);
     } catch (err) {
