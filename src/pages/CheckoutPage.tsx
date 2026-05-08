@@ -75,17 +75,10 @@ export function CheckoutPage() {
 
         if (data.success) {
           toast.success('Payment successful!');
-<<<<<<< HEAD
           localStorage.removeItem('bookingData');
-          window.location.href = `/?reference=${reference}`;
-        } else {
-          toast.error(data.error || data.message || 'Payment failed');
-=======
-          // Redirect to verification page
           window.location.href = `/verify-receipt?reference=${reference}`;
         } else {
           toast.error(data.message || 'Payment failed');
->>>>>>> b25a3e30 (feat: Complete Payaza payment integration with checkout page and booking creation)
         }
       }
     } catch (error) {
